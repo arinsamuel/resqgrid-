@@ -43,8 +43,36 @@ function App() {
     return 'key-' + Math.random().toString(36).substr(2, 9).toUpperCase();
   }
 
+  // ── Protocol & URL resolution helpers (Production / Railway / Local) ──
+  const getApiBaseUrl = () => {
+    if (import.meta.env.VITE_API_URL) {
+      return import.meta.env.VITE_API_URL.replace(/\/$/, '');
+    }
+    const isHttps = window.location.protocol === 'https:';
+    const protocol = isHttps ? 'https:' : 'http:';
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    
+    if (isLocal) {
+      return `${protocol}//${window.location.hostname}:8080`;
+    }
+    return `${protocol}//${window.location.host}`;
+  };
+
+  const getWsUrl = () => {
+    const apiBase = getApiBaseUrl();
+    let wsUrl = apiBase.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:');
+    
+    // Safety check: force wss:// if currently on an HTTPS page
+    if (window.location.protocol === 'https:' && wsUrl.startsWith('ws:')) {
+      wsUrl = wsUrl.replace(/^ws:/i, 'wss:');
+    }
+    
+    return `${wsUrl}/api/v1/ws`;
+  };
+
   const connectWS = () => {
-    const wsUrl = `ws://${window.location.hostname}:8080/api/v1/ws`;
+    const wsUrl = getWsUrl();
+    console.log(`Connecting WebSocket to: ${wsUrl}`);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -93,8 +121,9 @@ function App() {
     };
 
     try {
+      const apiBase = getApiBaseUrl();
       const response = await fetch(
-        `http://${window.location.hostname}:8080/api/v1/incidents`,
+        `${apiBase}/api/v1/incidents`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
       );
       if (!response.ok) {
@@ -114,8 +143,9 @@ function App() {
     e.preventDefault();
     setError(null); setSuccessMsg(null);
     try {
+      const apiBase = getApiBaseUrl();
       const response = await fetch(
-        `http://${window.location.hostname}:8080/api/v1/road-closure`,
+        `${apiBase}/api/v1/road-closure`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(closureForm) }
       );
       if (!response.ok) {
@@ -131,7 +161,8 @@ function App() {
 
   const handleShowExplanation = async (inc) => {
     try {
-      const response = await fetch(`http://${window.location.hostname}:8080/api/v1/explain/${inc.id}`);
+      const apiBase = getApiBaseUrl();
+      const response = await fetch(`${apiBase}/api/v1/explain/${inc.id}`);
       if (!response.ok) throw new Error("Failed to load explanation data.");
       const data = await response.json();
       setSelectedIncident({ ...inc, explanation: data });
