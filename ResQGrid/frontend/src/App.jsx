@@ -44,17 +44,33 @@ function App() {
   }
 
   // ── Protocol & URL resolution helpers (Production / Railway / Local) ──
+  // RAILWAY DEPLOYMENT: Set VITE_API_URL env var on your frontend Railway service
+  // to point at the backend service URL, e.g.:
+  //   VITE_API_URL=https://resqgrid-gateway.up.railway.app
   const getApiBaseUrl = () => {
+    // 1. Highest priority: explicit env var (required for Railway/production)
     if (import.meta.env.VITE_API_URL) {
       return import.meta.env.VITE_API_URL.replace(/\/$/, '');
     }
     const isHttps = window.location.protocol === 'https:';
     const protocol = isHttps ? 'https:' : 'http:';
-    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    
+    const isLocal = (
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1'
+    );
+    // 2. Local dev: append :8080 port for the Go gateway
     if (isLocal) {
       return `${protocol}//${window.location.hostname}:8080`;
     }
+    // 3. Production without VITE_API_URL — warn the developer loudly.
+    // This typically means the env var is missing on Railway, which
+    // causes every fetch to hit the frontend host (404 errors).
+    console.error(
+      '[ResQGrid] VITE_API_URL is not set. All API requests will target ' +
+      `the frontend host (${window.location.host}) and return 404. ` +
+      'Set VITE_API_URL to your Go backend service URL in Railway environment variables.'
+    );
+    // Best-effort fallback: same host (only works if frontend + backend share a host)
     return `${protocol}//${window.location.host}`;
   };
 
