@@ -70,6 +70,21 @@ function App() {
     return `${wsUrl}/api/v1/ws`;
   };
 
+  const safeParseJson = async (response) => {
+    const text = await response.text();
+    if (!text || !text.trim()) {
+      return {};
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      if (!response.ok) {
+        throw new Error(`Server returned HTTP ${response.status}${response.statusText ? ' ' + response.statusText : ''}`);
+      }
+      throw new Error(`Invalid response format from server (HTTP ${response.status})`);
+    }
+  };
+
   const connectWS = () => {
     const wsUrl = getWsUrl();
     console.log(`Connecting WebSocket to: ${wsUrl}`);
@@ -102,7 +117,29 @@ function App() {
     ws.onerror = (err) => { console.error("WebSocket error:", err); ws.close(); };
   };
 
+  const fetchInitialStatus = async () => {
+    try {
+      const apiBase = getApiBaseUrl();
+      const response = await fetch(`${apiBase}/api/v1/status`);
+      if (response.ok) {
+        const data = await safeParseJson(response);
+        if (data && typeof data === 'object') {
+          setMetrics(prev => ({
+            ...prev,
+            ingestion_latency_p95_ms: data.ingestion_latency_p95_ms || prev.ingestion_latency_p95_ms,
+            double_dispatch_rate: data.double_dispatch_rate || prev.double_dispatch_rate,
+            redis_connected: data.redis_status ?? prev.redis_connected,
+            kafka_connected: data.kafka_status ?? prev.kafka_connected,
+          }));
+        }
+      }
+    } catch (err) {
+      console.warn("Initial status fetch warning:", err.message);
+    }
+  };
+
   useEffect(() => {
+    fetchInitialStatus();
     connectWS();
     return () => { if (wsRef.current) wsRef.current.close(); };
   }, []);
@@ -126,12 +163,11 @@ function App() {
         `${apiBase}/api/v1/incidents`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
       );
+      const data = await safeParseJson(response);
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Server error ${response.status}`);
+        throw new Error(data.error || `Server error ${response.status}`);
       }
-      const result = await response.json();
-      setSuccessMsg(`Incident ${result.id.substring(0, 8)} dispatched & hospital bed reserved!`);
+      setSuccessMsg(`Incident ${data.id ? data.id.substring(0, 8) : ''} dispatched & hospital bed reserved!`);
       setIncidentForm({ type: "MEDICAL", severity: 3, location: "Sector 4", description: "", idempotencyKey: generateKey() });
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err) {
@@ -148,9 +184,9 @@ function App() {
         `${apiBase}/api/v1/road-closure`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(closureForm) }
       );
+      const data = await safeParseJson(response);
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Server error ${response.status}`);
+        throw new Error(data.error || `Server error ${response.status}`);
       }
       setSuccessMsg(`Route in ${closureForm.location} set to ${closureForm.status.toUpperCase()}`);
       setTimeout(() => setSuccessMsg(null), 4000);
@@ -163,8 +199,10 @@ function App() {
     try {
       const apiBase = getApiBaseUrl();
       const response = await fetch(`${apiBase}/api/v1/explain/${inc.id}`);
-      if (!response.ok) throw new Error("Failed to load explanation data.");
-      const data = await response.json();
+      const data = await safeParseJson(response);
+      if (!response.ok) {
+        throw new Error(data.error || `Failed to load explanation data (HTTP ${response.status}).`);
+      }
       setSelectedIncident({ ...inc, explanation: data });
     } catch (err) {
       setError(err.message);
