@@ -1,75 +1,136 @@
-version: '3.8'
-
 services:
+  # --- Spatial Database ---
+  postgres:
+    image: postgis/postgis:15-3.3
+    container_name: resqgrid-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: resqgrid
+      POSTGRES_USER: resqgrid
+      POSTGRES_PASSWORD: resqgrid_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U resqgrid -d resqgrid"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - resqgrid-net
+
+  # --- Cache & Lease Store ---
+  redis:
+    image: redis:7.0-alpine
+    container_name: resqgrid-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - resqgrid-net
+
+  # --- Event Streaming Coordination ---
   zookeeper:
     image: zookeeper:latest
     container_name: resqgrid-zookeeper
+    restart: always
     ports:
       - "2181:2181"
     networks:
       - resqgrid-net
 
+  # --- Event Streaming Log Broker ---
   kafka:
     image: wurstmeister/kafka:2.13-2.8.1
     container_name: resqgrid-kafka
+    restart: always
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_started
     ports:
       - "9092:9092"
     environment:
-      - KAFKA_ADVERTISED_HOST_NAME=kafka
-      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
-      - KAFKA_CREATE_TOPICS=resqgrid-incidents:1:1
+      KAFKA_ADVERTISED_HOST_NAME: kafka
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CREATE_TOPICS: resqgrid-incidents:1:1
     networks:
       - resqgrid-net
 
-
-  redis:
-    image: redis:7.0-alpine
-    container_name: resqgrid-redis
-    ports:
-      - "6379:6379"
-    networks:
-      - resqgrid-net
-
+  # --- Python CP-SAT Optimization Solver ---
   solver-python:
     build:
-      context: ./ResQGrid/solver-python
+      context: .
       dockerfile: Dockerfile
+      target: solver-python
     container_name: resqgrid-solver
+    restart: always
     ports:
       - "8000:8000"
+    environment:
+      PORT: "8000"
+      DATABASE_URL: "postgres://resqgrid:resqgrid_secret@postgres:5432/resqgrid?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - resqgrid-net
 
+  # --- Go Ingestion & Dispatch Gateway ---
   backend-go:
     build:
-      context: ./ResQGrid/backend-go
+      context: .
       dockerfile: Dockerfile
+      target: backend-go
     container_name: resqgrid-gateway
-    depends_on:
-      - redis
-      - kafka
-      - solver-python
+    restart: always
     ports:
       - "8080:8080"
+    environment:
+      REDIS_ADDR: "redis:6379"
+      KAFKA_ADDR: "kafka:9092"
+      KAFKA_TOPIC: "resqgrid-incidents"
+      SOLVER_URL: "http://solver-python:8000/solve"
+      DATABASE_URL: "postgres://resqgrid:resqgrid_secret@postgres:5432/resqgrid?sslmode=disable"
+    depends_on:
+      redis:
+        condition: service_started
+      kafka:
+        condition: service_started
+      solver-python:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     networks:
       - resqgrid-net
 
+  # --- React 19 / Vite Command Dashboard ---
   frontend:
     build:
-      context: ./ResQGrid/frontend
+      context: .
       dockerfile: Dockerfile
+      target: frontend
     container_name: resqgrid-frontend
+    restart: always
     ports:
       - "5173:5173"
     volumes:
       - ./ResQGrid/frontend:/app
       - /app/node_modules
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      VITE_API_URL: "http://localhost:8080"
+    depends_on:
+      backend-go:
+        condition: service_started
     networks:
       - resqgrid-net
-    environment:
-      - CHOKIDAR_USEPOLLING=true
+
+volumes:
+  postgres_data:
+  redis_data:
 
 networks:
   resqgrid-net:

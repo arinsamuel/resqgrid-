@@ -13,22 +13,34 @@ import (
 	"sync"
 	"time"
 
+	"os"
+
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
 )
 
-// --- CONFIGURATION ---
-const (
-	RedisAddr      = "redis:6379"
-	KafkaAddr      = "kafka:9092"
-	KafkaTopic     = "resqgrid-incidents"
-	SolverURL      = "http://solver-python:8000/solve"
-	LeaseDuration  = 30 * time.Second
-	BedLeaseDur    = 30 * time.Second
-	LatencyHistory = 100
+// --- CONFIGURATION & ENV ---
+
+func getEnv(key, fallback string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return fallback
+}
+
+var (
+	RedisAddr     = getEnv("REDIS_ADDR", "redis:6379")
+	KafkaAddr     = getEnv("KAFKA_ADDR", "kafka:9092")
+	KafkaTopic    = getEnv("KAFKA_TOPIC", "resqgrid-incidents")
+	SolverURL     = getEnv("SOLVER_URL", "http://solver-python:8000/solve")
+	PostgresURL   = getEnv("DATABASE_URL", "postgres://resqgrid:resqgrid_secret@postgres:5432/resqgrid?sslmode=disable")
+	LeaseDuration = 30 * time.Second
+	BedLeaseDur   = 30 * time.Second
 )
+
+const LatencyHistory = 100
 
 // --- DATA STRUCTURES ---
 
